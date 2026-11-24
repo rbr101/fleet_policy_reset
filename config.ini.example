@@ -9,5 +9,5 @@ username = elastic
 # true | false | pad naar CA-bestand (bijv. /pad/naar/ca.crt)
 verify_ssl = false
 
-# ID van de te resetten agent policy (hoofdlettergevoelig)
+# Optioneel: standaardwaarde bij de vraag om het policy-ID (hoofdlettergevoelig)
 policy_id = Kafka-consumer

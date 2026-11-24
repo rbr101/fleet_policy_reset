@@ -12,7 +12,7 @@ Stappen:
   5. Tijdelijke rol + user opruimen (altijd, ook bij fouten)
 
 Gebruik:
-  python3 fleet_policy_reset.py                 # gebruikt config.ini
+  python3 fleet_policy_reset.py                 # vraagt om wachtwoord en policy-ID
   python3 fleet_policy_reset.py -c andere.ini
   python3 fleet_policy_reset.py --policy-id Kafka-consumer --force
   python3 fleet_policy_reset.py --dry-run       # alleen tonen, niets wijzigen
@@ -118,6 +118,35 @@ def verify_login(admin: requests.Session, cfg: dict) -> None:
     log("Verbinding met Kibana OK")
 
 
+def list_policies(admin: requests.Session, cfg: dict) -> list:
+    r = admin.get(f"{cfg['kibana_url']}/api/fleet/agent_policies",
+                  params={"perPage": 1000, "withAgentCount": "true"}, timeout=TIMEOUT)
+    return check(r, "Agent policies ophalen").get("items", [])
+
+
+def prompt_policy_id(admin: requests.Session, cfg: dict) -> str:
+    """Toont de bestaande policies en vraagt welke verwijderd moet worden."""
+    default = cfg["policy_id"]
+    try:
+        policies = list_policies(admin, cfg)
+    except (RuntimeError, requests.RequestException) as e:
+        warn(f"Kon policies niet ophalen: {e}")
+        policies = []
+
+    if policies:
+        print("\nBestaande agent policies:")
+        w = max(len(p.get("id", "")) for p in policies)
+        print(f"  {'ID'.ljust(w)}  {'AGENTS':>6}  {'MANAGED':7}  NAAM")
+        for p in sorted(policies, key=lambda x: x.get("id", "")):
+            print(f"  {p.get('id', '').ljust(w)}  {p.get('agents', 0):>6}  "
+                  f"{str(p.get('is_managed', False)):7}  {p.get('name', '')}")
+        print("  (een al verwijderde policy staat hier niet meer; je kunt het ID toch invullen)\n")
+
+    hint = f" [{default}]" if default else ""
+    ans = input(f"Policy-ID om te verwijderen{hint}: ").strip()
+    return ans or default
+
+
 def create_temp_role_user(admin: requests.Session, cfg: dict, temp_pw: str) -> None:
     r = admin.put(f"{cfg['es_url']}/_security/role/{TEMP_ROLE}",
                   json=ROLE_BODY, timeout=TIMEOUT)
@@ -202,7 +231,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-c", "--config", default="config.ini", help="pad naar config.ini")
-    ap.add_argument("--policy-id", help="overschrijft policy_id uit config.ini")
+    ap.add_argument("--policy-id", help="policy-ID opgeven i.p.v. erom te vragen")
     ap.add_argument("--force", action="store_true",
                     help="policy ook verwijderen als er nog agents aan hangen")
     ap.add_argument("--dry-run", action="store_true",
@@ -211,9 +240,6 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    policy_id = args.policy_id or cfg["policy_id"]
-    if not policy_id:
-        sys.exit("Geen policy-id opgegeven (config.ini policy_id of --policy-id)")
 
     if cfg["verify"] is False:
         requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
@@ -226,6 +252,10 @@ def main() -> int:
     except (RuntimeError, requests.RequestException) as e:
         warn(str(e))
         return 1
+
+    policy_id = args.policy_id or prompt_policy_id(admin, cfg)
+    if not policy_id:
+        sys.exit("Geen policy-id opgegeven.")
 
     if args.dry_run:
         log("Dry-run: deletion records opzoeken met eigen account (kan falen zonder rechten)")

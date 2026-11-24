@@ -11,11 +11,12 @@ Dit record staat in een system index en kan zelfs door `elastic` niet zomaar wor
 ## Wat het script doet
 
 1. Inloggen op Elasticsearch en Kibana met de gebruiker uit `config.ini` (wachtwoord wordt gevraagd)
-2. Tijdelijke rol `kibana_ingest_admin` en user `tmp_ingest_admin` aanmaken (willekeurig wachtwoord, wordt niet getoond)
-3. De agent policy verwijderen via de Fleet API
-4. Het bijbehorende `fleet-preconfiguration-deletion-record` opzoeken (alleen records waarvan `id` exact gelijk is aan de policy-ID)
-5. Het record verwijderen als tijdelijke user en controleren dat het weg is
-6. Tijdelijke rol en user opruimen (ook als een eerdere stap mislukt)
+2. De bestaande agent policies tonen en vragen welk policy-ID verwijderd moet worden
+3. Tijdelijke rol `kibana_ingest_admin` en user `tmp_ingest_admin` aanmaken (willekeurig wachtwoord, wordt niet getoond)
+4. De agent policy verwijderen via de Fleet API
+5. Het bijbehorende `fleet-preconfiguration-deletion-record` opzoeken (alleen records waarvan `id` exact gelijk is aan de policy-ID)
+6. Het record verwijderen als tijdelijke user en controleren dat het weg is
+7. Tijdelijke rol en user opruimen (ook als een eerdere stap mislukt)
 
 Daarna herstart je Kibana zelf, zodat de policy opnieuw wordt aangemaakt.
 
@@ -46,11 +47,12 @@ kibana_url = https://localhost:5601
 username = elastic
 # true | false | pad naar CA-bestand
 verify_ssl = false
+# optioneel: standaardwaarde bij de vraag om het policy-ID
 policy_id = Kafka-consumer
 ```
 
 - `username` heeft rechten nodig om rollen en users te beheren en Fleet policies te verwijderen (bijv. `elastic`).
-- `policy_id` is hoofdlettergevoelig en moet overeenkomen met de `id` in de Kibana-config.
+- `policy_id` is optioneel en wordt als standaard voorgesteld bij de vraag om het policy-ID (Enter = overnemen). Het ID is hoofdlettergevoelig en moet overeenkomen met de `id` in de Kibana-config.
 - `config.ini` staat in `.gitignore`; commit alleen `config.ini.example`.
 
 Op OpenShift/ECK bijvoorbeeld via port-forward:
@@ -63,11 +65,27 @@ oc get secret <es-naam>-es-elastic-user -n <namespace> -o jsonpath='{.data.elast
 
 ## Gebruik
 
+Voorbeeld van de prompt:
+
+```
+Wachtwoord voor 'elastic':
+[+] Ingelogd op Elasticsearch als 'elastic'
+[+] Verbinding met Kibana OK
+
+Bestaande agent policies:
+  ID                 AGENTS  MANAGED  NAAM
+  eck-fleet-server        1  True     Fleet Server on ECK policy
+  Kafka-consumer          2  False    Kafka consumer policy
+  (een al verwijderde policy staat hier niet meer; je kunt het ID toch invullen)
+
+Policy-ID om te verwijderen [Kafka-consumer]:
+```
+
 ```bash
 # Eerst testen: alleen inloggen en record opzoeken, niets wijzigen
 python3 fleet_policy_reset.py --dry-run
 
-# Uitvoeren (vraagt om bevestiging)
+# Uitvoeren: vraagt om wachtwoord, toont de policies, vraagt om het policy-ID en om bevestiging
 python3 fleet_policy_reset.py
 
 # Andere config / policy, zonder bevestiging, ook als er nog agents aan hangen
@@ -77,7 +95,7 @@ python3 fleet_policy_reset.py -c prod.ini --policy-id Kafka-consumer --force -y
 | Optie | Omschrijving |
 |---|---|
 | `-c`, `--config` | Pad naar config-bestand (standaard `config.ini`) |
-| `--policy-id` | Overschrijft `policy_id` uit de config |
+| `--policy-id` | Policy-ID direct opgeven, zonder erom te vragen |
 | `--force` | Policy ook verwijderen als er nog agents aan gekoppeld zijn |
 | `--dry-run` | Alleen login en lookup, niets wijzigen |
 | `-y`, `--yes` | Niet om bevestiging vragen |
