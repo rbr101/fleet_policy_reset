@@ -1,5 +1,11 @@
 # Release notes
 
+## v1.0.1 — 2026-11-24
+
+### Opgelost
+
+- Script startte niet op Python 3.9 en ouder (`TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`). De type hints gebruiken nu `typing.Optional`/`Tuple`; het script werkt weer vanaf Python 3.6.
+
 ## v1.0.0 — 2026-11-24
 
 Eerste release van `fleet_policy_reset.py`: een script dat een gepreconfigureerde Fleet agent policy uit ECK reset, zodat Kibana hem bij de volgende herstart opnieuw aanmaakt met de actuele configuratie.
@@ -37,7 +43,7 @@ Wijzigingen aan policies in `xpack.fleet.agentPolicies` worden niet altijd doorg
 
 ### Vereisten
 
-- Python 3.10+ en `requests` (`pip install -r requirements.txt`)
+- Python 3.6+ en `requests` (`pip install -r requirements.txt`)
 - Een Elasticsearch-user die rollen en users mag beheren (bijv. `elastic`) en een Kibana-user die Fleet policies mag verwijderen
 
 ### Bekende beperkingen

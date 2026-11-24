@@ -30,6 +30,7 @@ import secrets
 import string
 import sys
 import time
+from typing import Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -130,7 +131,7 @@ def _verify_setting(section: configparser.SectionProxy):
     return section.getboolean("verify_ssl", fallback=True)
 
 
-def find_config(explicit: str | None) -> str:
+def find_config(explicit: Optional[str]) -> str:
     if explicit:
         if not os.path.isfile(explicit):
             sys.exit(f"Config-bestand niet gevonden: {explicit}")
@@ -142,7 +143,7 @@ def find_config(explicit: str | None) -> str:
              f"{CONFIG_NAME} of ~/.config/{CONFIG_NAME} en pas aan (of gebruik -c).")
 
 
-def load_config(path: str) -> tuple[Endpoint, Endpoint, str]:
+def load_config(path: str) -> Tuple["Endpoint", "Endpoint", str]:
     cp = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     cp.read(path)
     for sec in ("elasticsearch", "kibana"):
