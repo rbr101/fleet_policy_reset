@@ -14,13 +14,15 @@ Dit record staat in een system index en kan zelfs door `elastic` niet zomaar wor
 
 1. Inloggen op Elasticsearch en Kibana met de gebruikers uit `fleet_policy_reset.ini` (wachtwoord wordt gevraagd; bij dezelfde username maar één keer)
 2. De bestaande agent policies tonen en vragen welk policy-ID verwijderd moet worden
-3. Tijdelijke rol `kibana_ingest_admin` en user `tmp_ingest_admin` aanmaken (willekeurig wachtwoord, wordt niet getoond)
-4. De agent policy verwijderen via de Fleet API
-5. Het bijbehorende `fleet-preconfiguration-deletion-record` opzoeken (alleen records waarvan `id` exact gelijk is aan de policy-ID)
-6. Het record verwijderen als tijdelijke user en controleren dat het weg is
-7. Tijdelijke rol en user opruimen (ook als een eerdere stap mislukt)
+3. De agents tonen die aan die policy gekoppeld zijn (ook offline/inactief)
+4. Tijdelijke rol `kibana_ingest_admin` en user `tmp_ingest_admin` aanmaken (willekeurig wachtwoord, wordt niet getoond)
+5. De gekoppelde agents unenrollen (`revoke`, dus direct) en wachten tot de policy geen agents meer heeft — tenzij `--keep-agents`
+6. De agent policy verwijderen via de Fleet API
+7. Het bijbehorende `fleet-preconfiguration-deletion-record` opzoeken (alleen records waarvan `id` exact gelijk is aan de policy-ID)
+8. Het record verwijderen als tijdelijke user en controleren dat het weg is
+9. Tijdelijke rol en user opruimen (ook als een eerdere stap mislukt)
 
-Daarna herstart je Kibana zelf, zodat de policy opnieuw wordt aangemaakt.
+Daarna herstart je Kibana zelf, zodat de policy opnieuw wordt aangemaakt. Zijn er agents ge-unenrolled, herstart die dan ook, zodat ze opnieuw enrollen (bij ECK: de agent-pods verwijderen).
 
 De tijdelijke rol:
 
@@ -77,7 +79,7 @@ username = elastic
 | `[reset]` | `policy_id` | Optioneel: standaardwaarde bij de vraag om het policy-ID (Enter = overnemen) |
 
 - Zet **geen wachtwoord** in de config.
-- De Elasticsearch-user heeft rechten nodig om rollen en users te beheren (bijv. `elastic`); de Kibana-user moet Fleet policies kunnen verwijderen.
+- De Elasticsearch-user heeft rechten nodig om rollen en users te beheren (bijv. `elastic`); de Kibana-user moet Fleet policies kunnen verwijderen en agents kunnen unenrollen.
 - `policy_id` is hoofdlettergevoelig en moet overeenkomen met de `id` in `xpack.fleet.agentPolicies`.
 - `fleet_policy_reset.ini` staat in `.gitignore`; commit alleen `fleet_policy_reset.ini.example`.
 - ECK-CA ophalen: `oc get secret <es-naam>-es-http-certs-public -n <namespace> -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt`
@@ -107,6 +109,13 @@ Bestaande agent policies:
   (een al verwijderde policy staat hier niet meer; je kunt het ID toch invullen)
 
 Policy-ID om te verwijderen [Kafka-consumer]:
+
+Agents gekoppeld aan 'Kafka-consumer':
+  HOSTNAME              STATUS      AGENT-ID
+  kafka-consumer-0      online      3f2a...
+  kafka-consumer-1      offline     9c1b...
+
+2 agent(s) unenrollen, policy 'Kafka-consumer' en het deletion record verwijderen? [j/N]
 ```
 
 ```bash
@@ -116,7 +125,7 @@ Policy-ID om te verwijderen [Kafka-consumer]:
 # Uitvoeren: vraagt om wachtwoord, toont de policies, vraagt om het policy-ID en om bevestiging
 ./fleet_policy_reset.py
 
-# Andere config / policy, zonder bevestiging, ook als er nog agents aan hangen
+# Andere config / policy, zonder bevestiging (agents worden dan zonder vragen ge-unenrolled!)
 ./fleet_policy_reset.py -c prod.ini --policy-id Kafka-consumer --force -y
 ```
 
@@ -124,14 +133,17 @@ Policy-ID om te verwijderen [Kafka-consumer]:
 |---|---|
 | `-c`, `--config` | Pad naar config-bestand (standaard `./fleet_policy_reset.ini` of `~/.config/fleet_policy_reset.ini`) |
 | `--policy-id` | Policy-ID direct opgeven, zonder erom te vragen |
-| `--force` | Policy ook verwijderen als er nog agents aan gekoppeld zijn |
+| `--keep-agents` | Gekoppelde agents **niet** unenrollen; het script stopt dan als er agents aan de policy hangen |
+| `--force` | Policy ook verwijderen als er nog agents aan gekoppeld zijn (Fleet `force`) |
+| `--unenroll-timeout` | Seconden wachten tot de agents ge-unenrolled zijn (default 60) |
 | `--dry-run` | Alleen login en lookup, niets wijzigen |
 | `-y`, `--yes` | Niet om bevestiging vragen |
 
-Daarna Kibana herstarten en controleren:
+Daarna Kibana (en eventueel de ge-unenrollde agents) herstarten en controleren:
 
 ```bash
 oc delete pod -l kibana.k8s.elastic.co/name=<kibana-naam> -n <namespace>
+oc delete pod -l agent.k8s.elastic.co/name=<agent-naam> -n <namespace>
 ```
 
 ```
@@ -141,6 +153,7 @@ GET kbn:/api/fleet/agent_policies/Kafka-consumer
 ## Tips
 
 - Zet `is_managed: false` bij de policy in de Kibana-config als je hem ook in de UI wilt kunnen wijzigen.
+- Unenrollen gebeurt met `revoke`: de API keys van de agents worden direct ingetrokken en de agents verdwijnen uit Fleet. Ze komen pas terug als ze opnieuw enrollen (bij ECK: pod herstarten, ECK haalt dan een nieuw enrollment token op voor de opnieuw aangemaakte policy).
 - Is de policy al verwijderd, dan slaat het script die stap over en ruimt alleen het record op.
 - Mislukt het opruimen van de tijdelijke user/rol (bijv. door netwerkproblemen), verwijder ze dan handmatig:
   ```
@@ -152,6 +165,11 @@ GET kbn:/api/fleet/agent_policies/Kafka-consumer
 ## Handmatige variant
 
 ```
+GET kbn:/api/fleet/agents?kuery=policy_id:"Kafka-consumer"&showInactive=true
+
+POST kbn:/api/fleet/agents/bulk_unenroll
+{ "agents": ["<agent-id>", "<agent-id>"], "revoke": true }
+
 POST kbn:/api/fleet/agent_policies/delete
 { "agentPolicyId": "Kafka-consumer" }
 

@@ -1,5 +1,20 @@
 # Release notes
 
+## v1.1.0 — 2026-11-24
+
+### Nieuw
+
+- **Gekoppelde agents unenrollen vóór het verwijderen van de policy.** Een policy kan alleen worden verwijderd als er geen agents meer aan hangen. Het script toont nu de gekoppelde agents (hostname, status, agent-ID, ook offline/inactief), unenrollt ze na bevestiging met `revoke` en wacht tot de policy leeg is. Pas daarna wordt de policy verwijderd.
+- Optie `--keep-agents`: agents niet unenrollen; het script stopt dan als er nog agents gekoppeld zijn (oude gedrag).
+- Optie `--unenroll-timeout`: hoe lang gewacht wordt tot de agents ge-unenrolled zijn (default 60 seconden).
+- Aan het eind een hint om ook de ge-unenrollde agents te herstarten, zodat ze opnieuw enrollen.
+
+### Gewijzigd
+
+- Het aantal gekoppelde agents wordt nu via de Agents API bepaald in plaats van via het `agents`-veld van de policy, dat niet in elke versie wordt teruggegeven.
+- `--dry-run` toont nu ook welke agents ge-unenrolled zouden worden.
+- Met `-y` worden gekoppelde agents zonder bevestiging ge-unenrolled. Gebruik `--keep-agents` als je dat niet wilt.
+
 ## v1.0.2 — 2026-11-24
 
 ### Opgelost

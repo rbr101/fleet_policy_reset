@@ -7,10 +7,12 @@ volgende herstart opnieuw aanmaakt vanuit de ECK/Kibana-config.
 Stappen:
   1. Inloggen op Elasticsearch en Kibana (wachtwoord wordt gevraagd)
   2. Bestaande policies tonen en vragen welk policy-ID verwijderd moet worden
-  3. Tijdelijke rol + user aanmaken (rechten op .kibana_ingest*)
-  4. Agent policy verwijderen via de Fleet API
-  5. Deletion record opzoeken en verwijderen (als tijdelijke user)
-  6. Tijdelijke rol + user opruimen (altijd, ook bij fouten)
+  3. Gekoppelde agents tonen
+  4. Tijdelijke rol + user aanmaken (rechten op .kibana_ingest*)
+  5. Gekoppelde agents unenrollen (tenzij --keep-agents)
+  6. Agent policy verwijderen via de Fleet API
+  7. Deletion record opzoeken en verwijderen (als tijdelijke user)
+  8. Tijdelijke rol + user opruimen (altijd, ook bij fouten)
 
 Config: fleet_policy_reset.ini in de huidige map of ~/.config/fleet_policy_reset.ini
 (of -c pad). Zie fleet_policy_reset.ini.example.
@@ -218,19 +220,62 @@ def create_temp_role_user(es: Endpoint, temp_pw: str) -> None:
     log(f"Tijdelijke user '{TEMP_USER}' aangemaakt")
 
 
+def list_policy_agents(kb: Endpoint, policy_id: str) -> list:
+    """Alle (niet al ge-unenrollde) agents die aan de policy gekoppeld zijn, ook offline/inactief."""
+    r = kb.get("/api/fleet/agents",
+               params={"kuery": f'policy_id:"{policy_id}"', "perPage": 1000,
+                       "showInactive": "true"})
+    data = check(r, f"Agents van policy '{policy_id}' ophalen")
+    agents = data.get("items", data.get("list", []))
+    return [a for a in agents
+            if a.get("policy_id") == policy_id and a.get("status") != "unenrolled"]
+
+
+def agent_hostname(agent: dict) -> str:
+    return (agent.get("local_metadata", {}).get("host", {}).get("hostname")
+            or agent.get("local_metadata", {}).get("host", {}).get("name") or "?")
+
+
+def show_agents(agents: list) -> None:
+    w = max(8, *(len(agent_hostname(a)) for a in agents))
+    print(f"  {'HOSTNAME'.ljust(w)}  {'STATUS':10}  AGENT-ID")
+    for a in sorted(agents, key=agent_hostname):
+        print(f"  {agent_hostname(a).ljust(w)}  {str(a.get('status', '?')):10}  {a.get('id')}")
+
+
+def unenroll_agents(kb: Endpoint, policy_id: str, agents: list, wait: int = 60) -> None:
+    """Unenrollt de agents direct (revoke) en wacht tot de policy geen agents meer heeft."""
+    ids = [a["id"] for a in agents]
+    check(kb.post("/api/fleet/agents/bulk_unenroll", json={"agents": ids, "revoke": True}),
+          "Agents unenrollen")
+    log(f"Unenroll gestart voor {len(ids)} agent(s), wachten tot ze van de policy af zijn...")
+    deadline = time.time() + wait
+    while True:
+        remaining = list_policy_agents(kb, policy_id)
+        if not remaining:
+            log("Alle agents zijn ge-unenrolled")
+            return
+        if time.time() >= deadline:
+            raise RuntimeError(
+                f"Na {wait}s nog {len(remaining)} agent(s) gekoppeld: "
+                + ", ".join(agent_hostname(a) for a in remaining))
+        time.sleep(3)
+
+
 def delete_policy(kb: Endpoint, policy_id: str, force: bool) -> None:
     r = kb.get(f"/api/fleet/agent_policies/{quote(policy_id, safe='')}")
     if r.status_code == 404:
         warn(f"Policy '{policy_id}' bestaat niet (meer) - ga door met opruimen record")
         return
     data = check(r, f"Policy '{policy_id}' ophalen").get("item", {})
-    agents = data.get("agents", 0)
-    log(f"Policy gevonden: '{data.get('name')}' (agents: {agents}, "
-        f"managed: {data.get('is_managed')}, preconfigured: {data.get('is_preconfigured')})")
-    if agents and not force:
+    log(f"Policy gevonden: '{data.get('name')}' (managed: {data.get('is_managed')}, "
+        f"preconfigured: {data.get('is_preconfigured')})")
+
+    remaining = list_policy_agents(kb, policy_id)
+    if remaining and not force:
         raise RuntimeError(
-            f"Er zijn nog {agents} agent(s) aan deze policy gekoppeld. "
-            "Unenroll/reassign ze eerst, of gebruik --force.")
+            f"Er zijn nog {len(remaining)} agent(s) aan deze policy gekoppeld. "
+            "Laat het script ze unenrollen (zonder --keep-agents), of gebruik --force.")
 
     body = {"agentPolicyId": policy_id}
     if force:
@@ -285,8 +330,12 @@ def main() -> int:
     ap.add_argument("-c", "--config",
                     help=f"pad naar config (default: ./{CONFIG_NAME} of ~/.config/{CONFIG_NAME})")
     ap.add_argument("--policy-id", help="policy-ID opgeven i.p.v. erom te vragen")
+    ap.add_argument("--keep-agents", action="store_true",
+                    help="gekoppelde agents NIET unenrollen (dan stopt het script als er agents zijn)")
     ap.add_argument("--force", action="store_true",
-                    help="policy ook verwijderen als er nog agents aan hangen")
+                    help="policy ook verwijderen als er nog agents aan hangen (Fleet 'force')")
+    ap.add_argument("--unenroll-timeout", type=int, default=60,
+                    help="seconden wachten tot agents ge-unenrolled zijn (default 60)")
     ap.add_argument("--dry-run", action="store_true",
                     help="alleen login en lookup, niets wijzigen")
     ap.add_argument("-y", "--yes", action="store_true", help="niet om bevestiging vragen")
@@ -311,6 +360,21 @@ def main() -> int:
     if not policy_id:
         sys.exit("Geen policy-id opgegeven.")
 
+    try:
+        agents = list_policy_agents(kb, policy_id)
+    except (RuntimeError, requests.RequestException) as e:
+        warn(str(e))
+        return 1
+    if agents:
+        print(f"\nAgents gekoppeld aan '{policy_id}':")
+        show_agents(agents)
+        print()
+        if args.keep_agents:
+            warn("--keep-agents: deze agents worden niet ge-unenrolled")
+    else:
+        log(f"Geen agents gekoppeld aan '{policy_id}'")
+    unenroll = bool(agents) and not args.keep_agents
+
     if args.dry_run:
         log("Dry-run: deletion records opzoeken met eigen account (kan falen zonder rechten)")
         try:
@@ -320,7 +384,8 @@ def main() -> int:
         return 0
 
     if not args.yes:
-        ans = input(f"Policy '{policy_id}' en het deletion record verwijderen? [j/N] ")
+        what = f"{len(agents)} agent(s) unenrollen, " if unenroll else ""
+        ans = input(f"{what}policy '{policy_id}' en het deletion record verwijderen? [j/N] ")
         if ans.strip().lower() not in ("j", "ja", "y", "yes"):
             print("Afgebroken.")
             return 0
@@ -329,6 +394,8 @@ def main() -> int:
     rc = 0
     try:
         create_temp_role_user(es, temp_pw)
+        if unenroll:
+            unenroll_agents(kb, policy_id, agents, args.unenroll_timeout)
         delete_policy(kb, policy_id, args.force)
 
         temp = es.as_user(TEMP_USER, temp_pw)
@@ -352,6 +419,9 @@ def main() -> int:
     if rc == 0:
         log("Klaar. Herstart Kibana zodat de policy opnieuw wordt aangemaakt, bijv.:")
         print("    oc delete pod -l kibana.k8s.elastic.co/name=<kibana-naam> -n <namespace>")
+        if unenroll:
+            log("Herstart daarna ook de ge-unenrollde agents zodat ze opnieuw enrollen, bijv. (ECK):")
+            print("    oc delete pod -l agent.k8s.elastic.co/name=<agent-naam> -n <namespace>")
     return rc
 
 
