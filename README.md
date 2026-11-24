@@ -10,7 +10,7 @@ Dit record staat in een system index en kan zelfs door `elastic` niet zomaar wor
 
 ## Wat het script doet
 
-1. Inloggen op Elasticsearch en Kibana met de gebruiker uit `config.ini` (wachtwoord wordt gevraagd)
+1. Inloggen op Elasticsearch en Kibana met de gebruikers uit `fleet_policy_reset.ini` (wachtwoord wordt gevraagd; bij dezelfde username maar één keer)
 2. De bestaande agent policies tonen en vragen welk policy-ID verwijderd moet worden
 3. Tijdelijke rol `kibana_ingest_admin` en user `tmp_ingest_admin` aanmaken (willekeurig wachtwoord, wordt niet getoond)
 4. De agent policy verwijderen via de Fleet API
@@ -33,27 +33,52 @@ PUT _security/role/kibana_ingest_admin
 git clone https://github.com/rbr101/fleet_policy_reset.git
 cd fleet_policy_reset
 pip install -r requirements.txt
-cp config.ini.example config.ini   # en aanpassen
+cp fleet_policy_reset.ini.example fleet_policy_reset.ini   # en aanpassen
 ```
 
 ## Configuratie
 
-`config.ini`:
+Het script zoekt de config in deze volgorde:
+
+1. `-c pad/naar.ini`
+2. `./fleet_policy_reset.ini`
+3. `~/.config/fleet_policy_reset.ini`
+
+`fleet_policy_reset.ini`:
 
 ```ini
-[elastic]
-elasticsearch_url = https://localhost:9200
-kibana_url = https://localhost:5601
+[elasticsearch]
+url      = https://elasticsearch.example.local:9200
 username = elastic
-# true | false | pad naar CA-bestand
-verify_ssl = false
-# optioneel: standaardwaarde bij de vraag om het policy-ID
-policy_id = Kafka-consumer
+# ca_cert    = /pad/naar/ca.crt   # eigen CA (bijv. ECK: secret <naam>-es-http-certs-public)
+# verify_ssl = true               # alleen voor testen op false zetten
+# timeout    = 60                 # seconden per call
+
+[kibana]
+url      = https://kibana.example.local:5601   # inclusief eventueel basePath
+username = elastic
+# ca_cert    = /pad/naar/ca.crt
+# verify_ssl = true
+# timeout    = 60
+
+[reset]
+# policy_id = Kafka-consumer
 ```
 
-- `username` heeft rechten nodig om rollen en users te beheren en Fleet policies te verwijderen (bijv. `elastic`).
-- `policy_id` is optioneel en wordt als standaard voorgesteld bij de vraag om het policy-ID (Enter = overnemen). Het ID is hoofdlettergevoelig en moet overeenkomen met de `id` in de Kibana-config.
-- `config.ini` staat in `.gitignore`; commit alleen `config.ini.example`.
+| Sectie | Instelling | Omschrijving |
+|---|---|---|
+| `[elasticsearch]`, `[kibana]` | `url` | Endpoint; voor Kibana inclusief eventueel basePath |
+| | `username` | Gebruiker; wachtwoord wordt gevraagd (bij dezelfde username één keer) |
+| | `ca_cert` | Pad naar eigen CA; gaat voor op `verify_ssl` |
+| | `verify_ssl` | `true` (default) of `false` (alleen voor testen) |
+| | `timeout` | Seconden per call (default 60) |
+| `[reset]` | `policy_id` | Optioneel: standaardwaarde bij de vraag om het policy-ID (Enter = overnemen) |
+
+- Zet **geen wachtwoord** in de config.
+- De Elasticsearch-user heeft rechten nodig om rollen en users te beheren (bijv. `elastic`); de Kibana-user moet Fleet policies kunnen verwijderen.
+- `policy_id` is hoofdlettergevoelig en moet overeenkomen met de `id` in `xpack.fleet.agentPolicies`.
+- `fleet_policy_reset.ini` staat in `.gitignore`; commit alleen `fleet_policy_reset.ini.example`.
+- ECK-CA ophalen: `oc get secret <es-naam>-es-http-certs-public -n <namespace> -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt`
 
 Op OpenShift/ECK bijvoorbeeld via port-forward:
 
@@ -68,9 +93,10 @@ oc get secret <es-naam>-es-elastic-user -n <namespace> -o jsonpath='{.data.elast
 Voorbeeld van de prompt:
 
 ```
-Wachtwoord voor 'elastic':
-[+] Ingelogd op Elasticsearch als 'elastic'
-[+] Verbinding met Kibana OK
+[+] Config: fleet_policy_reset.ini
+Wachtwoord voor 'elastic' (Elasticsearch):
+[+] Ingelogd op Elasticsearch (https://localhost:9200) als 'elastic'
+[+] Ingelogd op Kibana (https://localhost:5601) als 'elastic'
 
 Bestaande agent policies:
   ID                 AGENTS  MANAGED  NAAM
@@ -83,18 +109,18 @@ Policy-ID om te verwijderen [Kafka-consumer]:
 
 ```bash
 # Eerst testen: alleen inloggen en record opzoeken, niets wijzigen
-python3 fleet_policy_reset.py --dry-run
+./fleet_policy_reset.py --dry-run
 
 # Uitvoeren: vraagt om wachtwoord, toont de policies, vraagt om het policy-ID en om bevestiging
-python3 fleet_policy_reset.py
+./fleet_policy_reset.py
 
 # Andere config / policy, zonder bevestiging, ook als er nog agents aan hangen
-python3 fleet_policy_reset.py -c prod.ini --policy-id Kafka-consumer --force -y
+./fleet_policy_reset.py -c prod.ini --policy-id Kafka-consumer --force -y
 ```
 
 | Optie | Omschrijving |
 |---|---|
-| `-c`, `--config` | Pad naar config-bestand (standaard `config.ini`) |
+| `-c`, `--config` | Pad naar config-bestand (standaard `./fleet_policy_reset.ini` of `~/.config/fleet_policy_reset.ini`) |
 | `--policy-id` | Policy-ID direct opgeven, zonder erom te vragen |
 | `--force` | Policy ook verwijderen als er nog agents aan gekoppeld zijn |
 | `--dry-run` | Alleen login en lookup, niets wijzigen |

@@ -1,0 +1,25 @@
+# Configuratie voor: ./fleet_policy_reset.py
+# Kopieer naar fleet_policy_reset.ini (of ~/.config/fleet_policy_reset.ini) en pas aan.
+# Zet hier GEEN wachtwoord in: dat wordt bij het starten in de terminal gevraagd.
+# Hebben Elasticsearch en Kibana dezelfde username, dan wordt het maar één keer gevraagd.
+# De user heeft rechten nodig om rollen/users te beheren en Fleet policies te verwijderen.
+
+[elasticsearch]
+url      = https://elasticsearch.example.local:9200
+username = elastic
+# ca_cert    = /pad/naar/ca.crt   # eigen CA (bijv. ECK: secret <naam>-es-http-certs-public)
+# verify_ssl = true               # alleen voor testen op false zetten
+# timeout    = 60                 # seconden per call
+
+[kibana]
+url      = https://kibana.example.local:5601   # inclusief eventueel basePath
+username = elastic
+# ca_cert    = /pad/naar/ca.crt
+# verify_ssl = true
+# timeout    = 60
+
+[reset]
+# Standaardwaarde bij de vraag welk policy-ID verwijderd moet worden (Enter = overnemen).
+# Hoofdlettergevoelig; moet overeenkomen met de 'id' in xpack.fleet.agentPolicies.
+# --policy-id op de commandline gaat voor.
+# policy_id = Kafka-consumer

@@ -5,22 +5,27 @@ fleet-preconfiguration-deletion-record, zodat Kibana de policy bij de
 volgende herstart opnieuw aanmaakt vanuit de ECK/Kibana-config.
 
 Stappen:
-  1. Tijdelijke rol + user aanmaken (rechten op .kibana_ingest*)
-  2. Agent policy verwijderen via de Fleet API
-  3. Deletion record opzoeken in .kibana_ingest
-  4. Deletion record verwijderen (als tijdelijke user)
-  5. Tijdelijke rol + user opruimen (altijd, ook bij fouten)
+  1. Inloggen op Elasticsearch en Kibana (wachtwoord wordt gevraagd)
+  2. Bestaande policies tonen en vragen welk policy-ID verwijderd moet worden
+  3. Tijdelijke rol + user aanmaken (rechten op .kibana_ingest*)
+  4. Agent policy verwijderen via de Fleet API
+  5. Deletion record opzoeken en verwijderen (als tijdelijke user)
+  6. Tijdelijke rol + user opruimen (altijd, ook bij fouten)
+
+Config: fleet_policy_reset.ini in de huidige map of ~/.config/fleet_policy_reset.ini
+(of -c pad). Zie fleet_policy_reset.ini.example.
 
 Gebruik:
-  python3 fleet_policy_reset.py                 # vraagt om wachtwoord en policy-ID
-  python3 fleet_policy_reset.py -c andere.ini
-  python3 fleet_policy_reset.py --policy-id Kafka-consumer --force
-  python3 fleet_policy_reset.py --dry-run       # alleen tonen, niets wijzigen
+  ./fleet_policy_reset.py                      # vraagt om wachtwoord en policy-ID
+  ./fleet_policy_reset.py -c andere.ini
+  ./fleet_policy_reset.py --policy-id Kafka-consumer --force
+  ./fleet_policy_reset.py --dry-run            # alleen tonen, niets wijzigen
 """
 
 import argparse
 import configparser
 import getpass
+import os
 import secrets
 import string
 import sys
@@ -29,10 +34,13 @@ from urllib.parse import quote
 
 import requests
 
+CONFIG_NAME = "fleet_policy_reset.ini"
+CONFIG_PATHS = [CONFIG_NAME, os.path.expanduser(f"~/.config/{CONFIG_NAME}")]
+
 TEMP_ROLE = "kibana_ingest_admin"
 TEMP_USER = "tmp_ingest_admin"
 RECORD_TYPE = "fleet-preconfiguration-deletion-record"
-TIMEOUT = 30
+DEFAULT_TIMEOUT = 60
 
 ROLE_BODY = {
     "indices": [
@@ -56,47 +64,6 @@ def warn(msg: str) -> None:
     print(f"[!] {msg}", file=sys.stderr)
 
 
-def load_config(path: str) -> dict:
-    cp = configparser.ConfigParser()
-    if not cp.read(path):
-        sys.exit(f"Config-bestand niet gevonden: {path}")
-    if "elastic" not in cp:
-        sys.exit(f"Sectie [elastic] ontbreekt in {path}")
-    s = cp["elastic"]
-
-    verify_raw = s.get("verify_ssl", "true").strip()
-    if verify_raw.lower() in ("false", "no", "0", "off"):
-        verify = False
-    elif verify_raw.lower() in ("true", "yes", "1", "on"):
-        verify = True
-    else:
-        verify = verify_raw  # pad naar CA-bestand
-
-    try:
-        return {
-            "es_url": s["elasticsearch_url"].rstrip("/"),
-            "kibana_url": s["kibana_url"].rstrip("/"),
-            "username": s["username"],
-            "policy_id": s.get("policy_id", "").strip(),
-            "verify": verify,
-        }
-    except KeyError as e:
-        sys.exit(f"Verplichte instelling ontbreekt in [elastic]: {e}")
-
-
-def gen_password(length: int = 32) -> str:
-    alphabet = string.ascii_letters + string.digits + "-_.!"
-    return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-def make_session(user: str, password: str, verify) -> requests.Session:
-    s = requests.Session()
-    s.auth = (user, password)
-    s.verify = verify
-    s.headers.update({"Content-Type": "application/json", "kbn-xsrf": "true"})
-    return s
-
-
 def check(resp: requests.Response, what: str, ok=(200, 201)) -> dict:
     if resp.status_code not in ok:
         raise RuntimeError(f"{what} mislukt: HTTP {resp.status_code} - {resp.text}")
@@ -106,36 +73,129 @@ def check(resp: requests.Response, what: str, ok=(200, 201)) -> dict:
         return {}
 
 
+def gen_password(length: int = 32) -> str:
+    alphabet = string.ascii_letters + string.digits + "-_.!"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+class Endpoint:
+    """Eén Elasticsearch- of Kibana-endpoint met eigen URL, TLS-instellingen en timeout."""
+
+    def __init__(self, name: str, url: str, username: str, verify, timeout: int):
+        self.name = name
+        self.url = url.rstrip("/")
+        self.username = username
+        self.verify = verify
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.verify = verify
+        self.session.headers.update({"Content-Type": "application/json", "kbn-xsrf": "true"})
+
+    def login(self, password: str) -> None:
+        self.session.auth = (self.username, password)
+
+    def as_user(self, username: str, password: str) -> "Endpoint":
+        other = Endpoint(self.name, self.url, username, self.verify, self.timeout)
+        other.login(password)
+        return other
+
+    def request(self, method: str, path: str, **kw) -> requests.Response:
+        kw.setdefault("timeout", self.timeout)
+        return self.session.request(method, f"{self.url}{path}", **kw)
+
+    def get(self, path, **kw):
+        return self.request("GET", path, **kw)
+
+    def post(self, path, **kw):
+        return self.request("POST", path, **kw)
+
+    def put(self, path, **kw):
+        return self.request("PUT", path, **kw)
+
+    def delete(self, path, **kw):
+        return self.request("DELETE", path, **kw)
+
+
+# --------------------------------------------------------------------------- #
+# Config
+# --------------------------------------------------------------------------- #
+def _verify_setting(section: configparser.SectionProxy):
+    """ca_cert gaat voor; anders verify_ssl (default true)."""
+    ca = section.get("ca_cert", "").strip()
+    if ca:
+        ca = os.path.expanduser(ca)
+        if not os.path.isfile(ca):
+            sys.exit(f"[{section.name}] ca_cert niet gevonden: {ca}")
+        return ca
+    return section.getboolean("verify_ssl", fallback=True)
+
+
+def find_config(explicit: str | None) -> str:
+    if explicit:
+        if not os.path.isfile(explicit):
+            sys.exit(f"Config-bestand niet gevonden: {explicit}")
+        return explicit
+    for p in CONFIG_PATHS:
+        if os.path.isfile(p):
+            return p
+    sys.exit(f"Geen config gevonden. Kopieer {CONFIG_NAME}.example naar "
+             f"{CONFIG_NAME} of ~/.config/{CONFIG_NAME} en pas aan (of gebruik -c).")
+
+
+def load_config(path: str) -> tuple[Endpoint, Endpoint, str]:
+    cp = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    cp.read(path)
+    for sec in ("elasticsearch", "kibana"):
+        if sec not in cp:
+            sys.exit(f"Sectie [{sec}] ontbreekt in {path}")
+    endpoints = []
+    for sec, label in (("elasticsearch", "Elasticsearch"), ("kibana", "Kibana")):
+        s = cp[sec]
+        try:
+            url, user = s["url"].strip(), s["username"].strip()
+        except KeyError as e:
+            sys.exit(f"Verplichte instelling {e} ontbreekt in [{sec}] ({path})")
+        timeout = s.getint("timeout", fallback=DEFAULT_TIMEOUT)
+        endpoints.append(Endpoint(label, url, user, _verify_setting(s), timeout))
+    default_policy = cp.get("reset", "policy_id", fallback="").strip()
+    return endpoints[0], endpoints[1], default_policy
+
+
 # --------------------------------------------------------------------------- #
 # Stappen
 # --------------------------------------------------------------------------- #
-def verify_login(admin: requests.Session, cfg: dict) -> None:
-    r = admin.get(f"{cfg['es_url']}/_security/_authenticate", timeout=TIMEOUT)
-    data = check(r, "Inloggen op Elasticsearch")
-    log(f"Ingelogd op Elasticsearch als '{data.get('username')}'")
-    r = admin.get(f"{cfg['kibana_url']}/api/status", timeout=TIMEOUT)
-    check(r, "Verbinden met Kibana")
-    log("Verbinding met Kibana OK")
+def ask_passwords(es: Endpoint, kb: Endpoint) -> None:
+    pw = getpass.getpass(f"Wachtwoord voor '{es.username}' (Elasticsearch): ")
+    es.login(pw)
+    if kb.username == es.username:
+        kb.login(pw)
+    else:
+        kb.login(getpass.getpass(f"Wachtwoord voor '{kb.username}' (Kibana): "))
 
 
-def list_policies(admin: requests.Session, cfg: dict) -> list:
-    r = admin.get(f"{cfg['kibana_url']}/api/fleet/agent_policies",
-                  params={"perPage": 1000, "withAgentCount": "true"}, timeout=TIMEOUT)
+def verify_login(es: Endpoint, kb: Endpoint) -> None:
+    data = check(es.get("/_security/_authenticate"), "Inloggen op Elasticsearch")
+    log(f"Ingelogd op Elasticsearch ({es.url}) als '{data.get('username')}'")
+    check(kb.get("/api/status"), "Inloggen op Kibana")
+    log(f"Ingelogd op Kibana ({kb.url}) als '{kb.username}'")
+
+
+def list_policies(kb: Endpoint) -> list:
+    r = kb.get("/api/fleet/agent_policies", params={"perPage": 1000, "withAgentCount": "true"})
     return check(r, "Agent policies ophalen").get("items", [])
 
 
-def prompt_policy_id(admin: requests.Session, cfg: dict) -> str:
+def prompt_policy_id(kb: Endpoint, default: str) -> str:
     """Toont de bestaande policies en vraagt welke verwijderd moet worden."""
-    default = cfg["policy_id"]
     try:
-        policies = list_policies(admin, cfg)
+        policies = list_policies(kb)
     except (RuntimeError, requests.RequestException) as e:
         warn(f"Kon policies niet ophalen: {e}")
         policies = []
 
     if policies:
         print("\nBestaande agent policies:")
-        w = max(len(p.get("id", "")) for p in policies)
+        w = max(2, *(len(p.get("id", "")) for p in policies))
         print(f"  {'ID'.ljust(w)}  {'AGENTS':>6}  {'MANAGED':7}  NAAM")
         for p in sorted(policies, key=lambda x: x.get("id", "")):
             print(f"  {p.get('id', '').ljust(w)}  {p.get('agents', 0):>6}  "
@@ -147,23 +207,18 @@ def prompt_policy_id(admin: requests.Session, cfg: dict) -> str:
     return ans or default
 
 
-def create_temp_role_user(admin: requests.Session, cfg: dict, temp_pw: str) -> None:
-    r = admin.put(f"{cfg['es_url']}/_security/role/{TEMP_ROLE}",
-                  json=ROLE_BODY, timeout=TIMEOUT)
-    check(r, f"Rol '{TEMP_ROLE}' aanmaken")
+def create_temp_role_user(es: Endpoint, temp_pw: str) -> None:
+    check(es.put(f"/_security/role/{TEMP_ROLE}", json=ROLE_BODY), f"Rol '{TEMP_ROLE}' aanmaken")
     log(f"Tijdelijke rol '{TEMP_ROLE}' aangemaakt")
-
-    r = admin.post(f"{cfg['es_url']}/_security/user/{TEMP_USER}",
-                   json={"password": temp_pw, "roles": [TEMP_ROLE],
-                         "full_name": "Tijdelijke user fleet_policy_reset.py"},
-                   timeout=TIMEOUT)
-    check(r, f"User '{TEMP_USER}' aanmaken")
+    check(es.post(f"/_security/user/{TEMP_USER}",
+                  json={"password": temp_pw, "roles": [TEMP_ROLE],
+                        "full_name": "Tijdelijke user fleet_policy_reset.py"}),
+          f"User '{TEMP_USER}' aanmaken")
     log(f"Tijdelijke user '{TEMP_USER}' aangemaakt")
 
 
-def delete_policy(admin: requests.Session, cfg: dict, policy_id: str, force: bool) -> None:
-    r = admin.get(f"{cfg['kibana_url']}/api/fleet/agent_policies/{quote(policy_id, safe='')}",
-                  timeout=TIMEOUT)
+def delete_policy(kb: Endpoint, policy_id: str, force: bool) -> None:
+    r = kb.get(f"/api/fleet/agent_policies/{quote(policy_id, safe='')}")
     if r.status_code == 404:
         warn(f"Policy '{policy_id}' bestaat niet (meer) - ga door met opruimen record")
         return
@@ -179,43 +234,39 @@ def delete_policy(admin: requests.Session, cfg: dict, policy_id: str, force: boo
     body = {"agentPolicyId": policy_id}
     if force:
         body["force"] = True
-    r = admin.post(f"{cfg['kibana_url']}/api/fleet/agent_policies/delete",
-                   json=body, timeout=TIMEOUT)
-    check(r, f"Policy '{policy_id}' verwijderen")
+    check(kb.post("/api/fleet/agent_policies/delete", json=body),
+          f"Policy '{policy_id}' verwijderen")
     log(f"Policy '{policy_id}' verwijderd")
 
 
-def find_records(temp: requests.Session, cfg: dict, policy_id: str) -> list:
+def find_records(es: Endpoint, policy_id: str, retries: int = 5) -> list:
     query = {"size": 100, "query": {"term": {"type": RECORD_TYPE}}}
     # Record kan een moment nodig hebben voordat het doorzoekbaar is
-    for attempt in range(5):
-        r = temp.post(f"{cfg['es_url']}/.kibana_ingest/_search?filter_path=hits.hits._id,hits.hits._source",
-                      json=query, timeout=TIMEOUT)
+    for attempt in range(retries):
+        r = es.post("/.kibana_ingest/_search",
+                    params={"filter_path": "hits.hits._id,hits.hits._source"}, json=query)
         hits = check(r, "Deletion records opzoeken").get("hits", {}).get("hits", [])
         matches = [h["_id"] for h in hits
                    if h.get("_source", {}).get(RECORD_TYPE, {}).get("id") == policy_id]
         if matches:
             return matches
-        if attempt < 4:
+        if attempt < retries - 1:
             time.sleep(2)
     return []
 
 
-def delete_records(temp: requests.Session, cfg: dict, ids: list) -> None:
+def delete_records(es: Endpoint, ids: list) -> None:
     for doc_id in ids:
-        url = f"{cfg['es_url']}/.kibana_ingest/_doc/{quote(doc_id, safe='')}?refresh=true"
-        r = temp.delete(url, timeout=TIMEOUT)
+        r = es.delete(f"/.kibana_ingest/_doc/{quote(doc_id, safe='')}", params={"refresh": "true"})
         data = check(r, f"Record '{doc_id}' verwijderen", ok=(200, 404))
         log(f"Record '{doc_id}': {data.get('result', r.status_code)}")
 
 
-def cleanup(admin: requests.Session, cfg: dict) -> None:
-    for what, url in (
-        (f"user '{TEMP_USER}'", f"{cfg['es_url']}/_security/user/{TEMP_USER}"),
-        (f"rol '{TEMP_ROLE}'", f"{cfg['es_url']}/_security/role/{TEMP_ROLE}"),
-    ):
+def cleanup(es: Endpoint) -> None:
+    for what, path in ((f"user '{TEMP_USER}'", f"/_security/user/{TEMP_USER}"),
+                       (f"rol '{TEMP_ROLE}'", f"/_security/role/{TEMP_ROLE}")):
         try:
-            r = admin.delete(url, timeout=TIMEOUT)
+            r = es.delete(path)
             if r.status_code in (200, 404):
                 log(f"Tijdelijke {what} opgeruimd")
             else:
@@ -230,7 +281,8 @@ def cleanup(admin: requests.Session, cfg: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("-c", "--config", default="config.ini", help="pad naar config.ini")
+    ap.add_argument("-c", "--config",
+                    help=f"pad naar config (default: ./{CONFIG_NAME} of ~/.config/{CONFIG_NAME})")
     ap.add_argument("--policy-id", help="policy-ID opgeven i.p.v. erom te vragen")
     ap.add_argument("--force", action="store_true",
                     help="policy ook verwijderen als er nog agents aan hangen")
@@ -239,28 +291,29 @@ def main() -> int:
     ap.add_argument("-y", "--yes", action="store_true", help="niet om bevestiging vragen")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg_path = find_config(args.config)
+    es, kb, default_policy = load_config(cfg_path)
+    log(f"Config: {cfg_path}")
 
-    if cfg["verify"] is False:
+    if es.verify is False or kb.verify is False:
         requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
+        warn("verify_ssl = false: certificaten worden niet gecontroleerd")
 
-    password = getpass.getpass(f"Wachtwoord voor '{cfg['username']}': ")
-    admin = make_session(cfg["username"], password, cfg["verify"])
-
+    ask_passwords(es, kb)
     try:
-        verify_login(admin, cfg)
+        verify_login(es, kb)
     except (RuntimeError, requests.RequestException) as e:
         warn(str(e))
         return 1
 
-    policy_id = args.policy_id or prompt_policy_id(admin, cfg)
+    policy_id = args.policy_id or prompt_policy_id(kb, default_policy)
     if not policy_id:
         sys.exit("Geen policy-id opgegeven.")
 
     if args.dry_run:
         log("Dry-run: deletion records opzoeken met eigen account (kan falen zonder rechten)")
         try:
-            print(find_records(admin, cfg, policy_id) or "geen records gevonden")
+            print(find_records(es, policy_id, retries=1) or "geen records gevonden")
         except (RuntimeError, requests.RequestException) as e:
             warn(str(e))
         return 0
@@ -274,17 +327,17 @@ def main() -> int:
     temp_pw = gen_password()
     rc = 0
     try:
-        create_temp_role_user(admin, cfg, temp_pw)
-        delete_policy(admin, cfg, policy_id, args.force)
+        create_temp_role_user(es, temp_pw)
+        delete_policy(kb, policy_id, args.force)
 
-        temp = make_session(TEMP_USER, temp_pw, cfg["verify"])
-        ids = find_records(temp, cfg, policy_id)
+        temp = es.as_user(TEMP_USER, temp_pw)
+        ids = find_records(temp, policy_id)
         if not ids:
             warn(f"Geen {RECORD_TYPE} gevonden voor '{policy_id}'")
         else:
             log(f"Gevonden record(s): {', '.join(ids)}")
-            delete_records(temp, cfg, ids)
-            if find_records(temp, cfg, policy_id):
+            delete_records(temp, ids)
+            if find_records(temp, policy_id, retries=1):
                 warn("Record bestaat nog steeds na verwijderen!")
                 rc = 1
             else:
@@ -293,7 +346,7 @@ def main() -> int:
         warn(str(e))
         rc = 1
     finally:
-        cleanup(admin, cfg)
+        cleanup(es)
 
     if rc == 0:
         log("Klaar. Herstart Kibana zodat de policy opnieuw wordt aangemaakt, bijv.:")
