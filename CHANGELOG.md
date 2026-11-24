@@ -1,11 +1,16 @@
 # Release notes
 
+## v1.0.2 — 2026-11-24
+
+### Opgelost
+
+- Ophalen van de agent policies gaf HTTP 400 door de parameter `withAgentCount`. Die wordt niet meer meegestuurd; de policylijst toont daarom geen aantal agents meer. De controle op gekoppelde agents vóór het verwijderen blijft werken.
+
 ## v1.0.1 — 2026-11-24
 
 ### Opgelost
 
 - Script startte niet op Python 3.9 en ouder (`TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`). De type hints gebruiken nu `typing.Optional`/`Tuple`; het script werkt weer vanaf Python 3.6.
-- Ophalen van de agent policies gaf HTTP 400 door de parameter `withAgentCount`. Die wordt niet meer meegestuurd; de policylijst toont daarom geen aantal agents meer. De controle op gekoppelde agents vóór het verwijderen blijft werken.
 
 ## v1.0.0 — 2026-11-24
 
