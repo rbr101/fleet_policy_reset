@@ -5,6 +5,7 @@
 ### Opgelost
 
 - Script startte niet op Python 3.9 en ouder (`TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`). De type hints gebruiken nu `typing.Optional`/`Tuple`; het script werkt weer vanaf Python 3.6.
+- Ophalen van de agent policies gaf HTTP 400 door de parameter `withAgentCount`. Die wordt niet meer meegestuurd; de policylijst toont daarom geen aantal agents meer. De controle op gekoppelde agents vóór het verwijderen blijft werken.
 
 ## v1.0.0 — 2026-11-24
 
@@ -16,7 +17,7 @@ Wijzigingen aan policies in `xpack.fleet.agentPolicies` worden niet altijd doorg
 
 ### Functionaliteit
 
-- **Interactief policy kiezen**: toont alle agent policies (ID, aantal agents, managed, naam) en vraagt welk policy-ID verwijderd moet worden. Een al verwijderde policy kan ook worden ingevuld; dan wordt alleen het record opgeruimd.
+- **Interactief policy kiezen**: toont alle agent policies (ID, managed, naam) en vraagt welk policy-ID verwijderd moet worden. Een al verwijderde policy kan ook worden ingevuld; dan wordt alleen het record opgeruimd.
 - **Tijdelijke rechten**: maakt de rol `kibana_ingest_admin` (met `allow_restricted_indices`) en user `tmp_ingest_admin` aan met een willekeurig wachtwoord dat niet wordt getoond.
 - **Policy verwijderen** via de Fleet API, met een controle op gekoppelde agents (overslaan met `--force`).
 - **Deletion record opzoeken en verwijderen**: alleen records waarvan `id` exact gelijk is aan het policy-ID, gevolgd door een controle dat het record weg is.

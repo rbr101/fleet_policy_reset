@@ -182,7 +182,7 @@ def verify_login(es: Endpoint, kb: Endpoint) -> None:
 
 
 def list_policies(kb: Endpoint) -> list:
-    r = kb.get("/api/fleet/agent_policies", params={"perPage": 1000, "withAgentCount": "true"})
+    r = kb.get("/api/fleet/agent_policies", params={"perPage": 1000})
     return check(r, "Agent policies ophalen").get("items", [])
 
 
@@ -197,9 +197,9 @@ def prompt_policy_id(kb: Endpoint, default: str) -> str:
     if policies:
         print("\nBestaande agent policies:")
         w = max(2, *(len(p.get("id", "")) for p in policies))
-        print(f"  {'ID'.ljust(w)}  {'AGENTS':>6}  {'MANAGED':7}  NAAM")
+        print(f"  {'ID'.ljust(w)}  {'MANAGED':7}  NAAM")
         for p in sorted(policies, key=lambda x: x.get("id", "")):
-            print(f"  {p.get('id', '').ljust(w)}  {p.get('agents', 0):>6}  "
+            print(f"  {p.get('id', '').ljust(w)}  "
                   f"{str(p.get('is_managed', False)):7}  {p.get('name', '')}")
         print("  (een al verwijderde policy staat hier niet meer; je kunt het ID toch invullen)\n")
 

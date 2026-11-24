@@ -101,9 +101,9 @@ Wachtwoord voor 'elastic' (Elasticsearch):
 [+] Ingelogd op Kibana (https://localhost:5601) als 'elastic'
 
 Bestaande agent policies:
-  ID                 AGENTS  MANAGED  NAAM
-  eck-fleet-server        1  True     Fleet Server on ECK policy
-  Kafka-consumer          2  False    Kafka consumer policy
+  ID                MANAGED  NAAM
+  eck-fleet-server  True     Fleet Server on ECK policy
+  Kafka-consumer    False    Kafka consumer policy
   (een al verwijderde policy staat hier niet meer; je kunt het ID toch invullen)
 
 Policy-ID om te verwijderen [Kafka-consumer]:
