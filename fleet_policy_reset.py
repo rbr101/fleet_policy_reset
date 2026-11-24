@@ -37,6 +37,8 @@ from urllib.parse import quote
 
 import requests
 
+__version__ = "1.1.0"
+
 CONFIG_NAME = "fleet_policy_reset.ini"
 CONFIG_PATHS = [CONFIG_NAME, os.path.expanduser(f"~/.config/{CONFIG_NAME}")]
 
@@ -327,6 +329,7 @@ def cleanup(es: Endpoint) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("-c", "--config",
                     help=f"pad naar config (default: ./{CONFIG_NAME} of ~/.config/{CONFIG_NAME})")
     ap.add_argument("--policy-id", help="policy-ID opgeven i.p.v. erom te vragen")
@@ -343,7 +346,7 @@ def main() -> int:
 
     cfg_path = find_config(args.config)
     es, kb, default_policy = load_config(cfg_path)
-    log(f"Config: {cfg_path}")
+    log(f"fleet_policy_reset {__version__} - config: {cfg_path}")
 
     if es.verify is False or kb.verify is False:
         requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]

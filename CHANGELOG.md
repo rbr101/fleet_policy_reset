@@ -8,6 +8,7 @@
 - Optie `--keep-agents`: agents niet unenrollen; het script stopt dan als er nog agents gekoppeld zijn (oude gedrag).
 - Optie `--unenroll-timeout`: hoe lang gewacht wordt tot de agents ge-unenrolled zijn (default 60 seconden).
 - Aan het eind een hint om ook de ge-unenrollde agents te herstarten, zodat ze opnieuw enrollen.
+- Optie `-V`/`--version`; de versie staat ook in de eerste regel van de output.
 
 ### Gewijzigd
 

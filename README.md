@@ -97,7 +97,7 @@ oc get secret <es-naam>-es-elastic-user -n <namespace> -o jsonpath='{.data.elast
 Voorbeeld van de prompt:
 
 ```
-[+] Config: fleet_policy_reset.ini
+[+] fleet_policy_reset 1.1.0 - config: fleet_policy_reset.ini
 Wachtwoord voor 'elastic' (Elasticsearch):
 [+] Ingelogd op Elasticsearch (https://localhost:9200) als 'elastic'
 [+] Ingelogd op Kibana (https://localhost:5601) als 'elastic'
@@ -131,6 +131,7 @@ Agents gekoppeld aan 'Kafka-consumer':
 
 | Optie | Omschrijving |
 |---|---|
+| `-V`, `--version` | Versie tonen |
 | `-c`, `--config` | Pad naar config-bestand (standaard `./fleet_policy_reset.ini` of `~/.config/fleet_policy_reset.ini`) |
 | `--policy-id` | Policy-ID direct opgeven, zonder erom te vragen |
 | `--keep-agents` | Gekoppelde agents **niet** unenrollen; het script stopt dan als er agents aan de policy hangen |
