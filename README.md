@@ -2,6 +2,8 @@
 
 Script om een gepreconfigureerde Fleet agent policy (gedefinieerd in de Kibana-config van ECK) te resetten, zodat Kibana hem opnieuw aanmaakt met de actuele configuratie.
 
+Zie [CHANGELOG.md](CHANGELOG.md) voor de release notes.
+
 ## Achtergrond
 
 Wijzigingen aan een policy in `xpack.fleet.agentPolicies` (Kibana CR in ECK) worden niet altijd doorgevoerd in Kibana. Verwijder je de policy om hem opnieuw te laten aanmaken, dan legt Kibana een saved object van het type `fleet-preconfiguration-deletion-record` aan in `.kibana_ingest`. Zolang dat record bestaat, maakt Kibana de policy **niet** opnieuw aan.
